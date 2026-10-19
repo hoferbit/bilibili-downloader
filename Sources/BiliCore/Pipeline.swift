@@ -141,7 +141,20 @@ public struct DownloadPipeline: Sendable {
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = sanitizeFileName(e.fileName)
         let final = dir.appendingPathComponent(name + ".mp4")
+        let tmp = dir.appendingPathComponent(".bilidl-tmp", isDirectory: true)
+            .appendingPathComponent(sanitizeFileName(e.id.replacingOccurrences(of: "#", with: "_")), isDirectory: true)
         if fm.fileExists(atPath: final.path) {
+            if settings.wechatShareEnabled {
+                let share = settings.wechatShareOptions.outputURL(for: final)
+                if fm.fileExists(atPath: share.path) {
+                    return JobResult(file: share, skipped: true, note: "微信分享文件已存在，跳过")
+                }
+                try await lease.compose()
+                let duration = await ffmpeg.probeDuration(final)
+                let result = try await makeWechatShare(final, duration: duration, tag: tag, update: update)
+                try? fm.removeItem(at: tmp)
+                return result
+            }
             return JobResult(file: final, skipped: true, note: "文件已存在，跳过")
         }
 
@@ -155,8 +168,6 @@ public struct DownloadPipeline: Sendable {
             notes.append("未登录，最高只能 480P")
         }
 
-        let tmp = dir.appendingPathComponent(".bilidl-tmp", isDirectory: true)
-            .appendingPathComponent(sanitizeFileName(e.id.replacingOccurrences(of: "#", with: "_")), isDirectory: true)
         let sourceKey = tmp.appendingPathComponent("source.key")
         if fm.fileExists(atPath: tmp.path),
            (try? String(contentsOf: sourceKey, encoding: .utf8)) != s.cacheIdentity {
@@ -265,13 +276,35 @@ public struct DownloadPipeline: Sendable {
 
         timer.begin("收尾")
         try fm.moveItem(at: outputFile, to: final)
+        // 正常文件先落盘，分享压缩失败或取消后可直接从该文件重试，无需重新下载。
+        var shareResult: JobResult?
+        if settings.wechatShareEnabled {
+            timer.begin("微信分享")
+            shareResult = try await makeWechatShare(final, duration: Double(s.durationMs) / 1000, tag: tag, update: update)
+        }
         try? fm.removeItem(at: tmp)
         // 临时目录空了就删掉
         let tmpRoot = tmp.deletingLastPathComponent()
         if (try? fm.contentsOfDirectory(atPath: tmpRoot.path))?.isEmpty == true { try? fm.removeItem(at: tmpRoot) }
 
-        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: outQuality))
-        return JobResult(file: final, skipped: false, note: notes.joined(separator: "，"))
+        if let shareResult { notes.append(shareResult.note) }
+        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: shareResult == nil ? outQuality : "微信分享 · \(settings.wechatShareOptions.speedLabel)倍"))
+        return JobResult(file: shareResult?.file ?? final, skipped: false, note: notes.joined(separator: "，"))
+    }
+
+    private func makeWechatShare(_ input: URL, duration: Double?, tag: String,
+                                 update: @escaping @Sendable (JobUpdate) -> Void) async throws -> JobResult {
+        let options = settings.wechatShareOptions
+        let output = options.outputURL(for: input)
+        let sidecar = input.deletingPathExtension().appendingPathExtension("ass")
+        let ass = settings.danmakuMode == .assFile && FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil
+        update(JobUpdate(stage: .rendering, progress: 0, detail: "微信分享：\(options.speedLabel)倍，压缩中…"))
+        try await ffmpeg.exportWechatShare(input: input, output: output, options: options, ass: ass,
+                                          sourceDuration: duration, tag: tag) { p in
+            update(JobUpdate(stage: .rendering, progress: duration == nil ? nil : p.fraction,
+                             detail: "微信分享：\(options.speedLabel)倍 · \(Int(p.fraction * 100))%"))
+        }
+        return JobResult(file: output, skipped: false, note: "已生成微信分享版（\(options.speedLabel)倍），保留正常版本")
     }
 
     private func download(_ s: StreamInfo, into tmp: URL, merged: URL, quality: String, tag: String,

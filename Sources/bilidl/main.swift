@@ -20,6 +20,11 @@ let usage = """
       --segments <n>       烧录时并行渲染段数（默认 0 = 自动）
       --keep-original      烧录后保留无弹幕原版
       --xml                同时保存 XML 弹幕
+      --wechat             额外生成微信分享版（默认 1.5 倍速，保留正常版本）
+      --no-wechat          本次不生成微信分享版
+      --wechat-speed <n>   分享倍速，1~2（默认 1.5）
+      --wechat-kbps <n>    分享视频码率，400~2000（默认 1000）
+      --wechat-edge <n>    分享最长边，320~1280 像素（默认 960）
       --all                列表全部下载（默认只下载链接指向的那一集/全部分P）
       --list               只列出解析结果，不下载
   -v, --verbose            在终端同时输出详细日志
@@ -69,6 +74,17 @@ while !args.isEmpty {
     case "--segments": settings.burnSegments = max(0, Int(value()) ?? 0)
     case "--keep-original": settings.keepOriginal = true
     case "--xml": settings.saveXML = true
+    case "--wechat": settings.wechatShareEnabled = true
+    case "--no-wechat": settings.wechatShareEnabled = false
+    case "--wechat-speed":
+        guard let speed = Double(value()), speed.isFinite, (1 ... 2).contains(speed) else { fail("分享倍速须为 1~2") }
+        settings.wechatShareSpeed = speed
+    case "--wechat-kbps":
+        guard let rate = Int(value()), (400 ... 2000).contains(rate) else { fail("分享视频码率须为 400~2000 kbps") }
+        settings.wechatShareVideoKbps = rate
+    case "--wechat-edge":
+        guard let edge = Int(value()), (320 ... 1280).contains(edge) else { fail("分享最长边须为 320~1280 像素") }
+        settings.wechatShareMaxDimension = edge
     case "--all": selectAll = true
     case "--list": listOnly = true
     case "-v", "--verbose":

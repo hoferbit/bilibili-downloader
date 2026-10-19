@@ -13,3 +13,4 @@ settings.json
 queue.json
 *.log
 .bilidl-tmp/
+.wechat-*/

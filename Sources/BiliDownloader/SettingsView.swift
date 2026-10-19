@@ -117,6 +117,34 @@ struct SettingsView: View {
 
             Form {
                 Section {
+                    Toggle("微信分享模式", isOn: $model.settings.wechatShareEnabled)
+                        .toggleStyle(.checkbox)
+                    if model.settings.wechatShareEnabled {
+                        SliderRow(title: "播放速度", value: $model.settings.wechatShareSpeed, range: 1 ... 2, format: "%.2f 倍", scale: 1)
+                        Picker("最长边", selection: $model.settings.wechatShareMaxDimension) {
+                            Text("640px（更小）").tag(640)
+                            Text("960px（默认）").tag(960)
+                            Text("1280px（更清晰）").tag(1280)
+                        }
+                        Stepper("视频码率 \(model.settings.wechatShareVideoKbps) kbps", value: $model.settings.wechatShareVideoKbps, in: 400 ... 2000, step: 100)
+                        Button("恢复分享默认参数") {
+                            model.settings.wechatShareSpeed = 1.5
+                            model.settings.wechatShareVideoKbps = 1000
+                            model.settings.wechatShareMaxDimension = 960
+                        }
+                    }
+                } header: {
+                    Text("微信分享")
+                } footer: {
+                    Text("额外生成分享版 MP4，保留正常版本。默认 1.5 倍速、最长边 960px、30fps；音调保持不变，弹幕同步加速。\n默认原片每分钟约生成 5.3MB。这是本程序的压缩预设，微信仍可能二次压缩。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("微信分享", systemImage: "square.and.arrow.up") }
+
+            Form {
+                Section {
                     LabeledContent("当前使用") {
                         Text(model.ffmpeg?.path ?? "未找到").foregroundStyle(model.ffmpeg == nil ? .red : .secondary)
                     }

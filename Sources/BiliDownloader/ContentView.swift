@@ -98,6 +98,16 @@ struct InputBar: View {
                 Spacer()
             }
             .controlSize(.small)
+            HStack(spacing: 8) {
+                Toggle("微信分享模式", isOn: $model.settings.wechatShareEnabled)
+                    .toggleStyle(.checkbox)
+                    .help("额外生成小体积 MP4，保留正常版本；速度和体积可在设置里调整")
+                if model.settings.wechatShareEnabled {
+                    Text("\(model.settings.wechatShareOptions.speedLabel)倍 · \(model.settings.wechatShareOptions.maxDimension)px · \(model.settings.wechatShareOptions.videoKbps)kbps")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .controlSize(.small)
         }
         .onAppear { focused = true }
     }
