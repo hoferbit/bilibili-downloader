@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+__pycache__/
+*.pyc
+.env
+.env.*
+cookies.json
+settings.json
+queue.json
+*.log
+.bilidl-tmp/
