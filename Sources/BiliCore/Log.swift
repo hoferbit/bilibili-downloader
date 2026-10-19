@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// 日志写到 ~/Library/Logs/BiliDownloader/yyyy-MM-dd.log（同时进系统日志，可在“控制台”App 里按 local.bilidownloader 过滤）。
+/// 日志写到工作目录的 01_log/yyyy-MM-dd.log，同时进系统日志。
 /// 只记录排查和优化需要的信息，不记录 Cookie。
 public final class Log: @unchecked Sendable {
     public enum Level: String { case debug = "DEBUG", info = "INFO", warn = "WARN", error = "ERROR" }
@@ -9,9 +9,10 @@ public final class Log: @unchecked Sendable {
     public static let shared = Log()
 
     public static var directory: URL {
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs/BiliDownloader", isDirectory: true)
+        shared.queue.sync { shared.logDirectory }
     }
+
+    public static func configure(workDirectory: URL) { shared.configureDirectory(workDirectory: workDirectory) }
 
     /// 命令行 --verbose 时把日志同时打到终端
     public var echo: (@Sendable (String) -> Void)?
@@ -19,20 +20,35 @@ public final class Log: @unchecked Sendable {
     private let queue = DispatchQueue(label: "bilidl.log")
     private var handle: FileHandle?
     private var day = ""
+    private var logDirectory: URL
     private let os = Logger(subsystem: "local.bilidownloader", category: "app")
     private let dayFormat: DateFormatter
     private let timeFormat: DateFormatter
 
-    private init() {
+    init(workDirectory: URL = WorkLayout.defaultDirectory) {
+        logDirectory = workDirectory.appendingPathComponent("01_log", isDirectory: true)
         dayFormat = DateFormatter()
         dayFormat.dateFormat = "yyyy-MM-dd"
         timeFormat = DateFormatter()
         timeFormat.dateFormat = "HH:mm:ss.SSS"
-        queue.async { self.cleanup() }
+        queue.async { self.cleanup(in: self.logDirectory) }
+    }
+
+    func configureDirectory(workDirectory: URL) {
+        let directory = workDirectory.appendingPathComponent("01_log", isDirectory: true)
+        queue.sync {
+            guard directory != logDirectory else { return }
+            try? handle?.close()
+            handle = nil
+            day = ""
+            logDirectory = directory
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            cleanup(in: directory)
+        }
     }
 
     public var currentFile: URL {
-        Self.directory.appendingPathComponent(dayFormat.string(from: Date()) + ".log")
+        queue.sync { logDirectory.appendingPathComponent(dayFormat.string(from: Date()) + ".log") }
     }
 
     public func write(_ level: Level, _ message: String, tag: String? = nil) {
@@ -49,8 +65,8 @@ public final class Log: @unchecked Sendable {
             let d = self.dayFormat.string(from: now)
             if d != self.day || self.handle == nil {
                 try? self.handle?.close()
-                try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
-                let url = Self.directory.appendingPathComponent(d + ".log")
+                try? FileManager.default.createDirectory(at: self.logDirectory, withIntermediateDirectories: true)
+                let url = self.logDirectory.appendingPathComponent(d + ".log")
                 if !FileManager.default.fileExists(atPath: url.path) {
                     FileManager.default.createFile(atPath: url.path, contents: nil)
                 }
@@ -68,9 +84,9 @@ public final class Log: @unchecked Sendable {
     }
 
     /// 只保留最近 14 天
-    private func cleanup() {
+    private func cleanup(in directory: URL) {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: Self.directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         let cutoff = Date().addingTimeInterval(-14 * 86400)
         for f in files where f.pathExtension == "log" {
             if let d = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d < cutoff {

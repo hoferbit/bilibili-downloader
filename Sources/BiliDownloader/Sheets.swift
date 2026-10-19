@@ -74,7 +74,7 @@ struct SelectionSheet: View {
             .listStyle(.bordered(alternatesRowBackgrounds: true))
 
             HStack {
-                Text("保存到：\(selection.list.kind == .video ? model.settings.downloadDir : model.settings.downloadDir + "/" + (selection.list.entries.first?.folder ?? ""))")
+                Text("保存到：\(model.settings.downloadDir)")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Button("取消") { dismiss() }

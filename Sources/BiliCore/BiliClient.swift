@@ -75,8 +75,8 @@ public final class BiliClient: @unchecked Sendable {
     private var mixinKey: String?
     private var mixinKeyDate = Date.distantPast
 
-    public init(store: CookieStore = .shared) {
-        let cfg = URLSessionConfiguration.default
+    public init(store: CookieStore = .shared, configuration: URLSessionConfiguration = .default) {
+        let cfg = configuration
         // Cookie 由我们自己管理，避免和系统共享存储互相污染
         cfg.httpCookieAcceptPolicy = .never
         cfg.httpShouldSetCookies = false

@@ -42,7 +42,7 @@ final class WechatShareTests: XCTestCase {
         let output = WechatShareOptions().outputURL(for: input)
         XCTAssertNotEqual(output, input)
         XCTAssertLessThanOrEqual(output.lastPathComponent.utf8.count, 255)
-        XCTAssertTrue(output.lastPathComponent.contains("微信分享 1.5倍"))
+        XCTAssertTrue(output.lastPathComponent.contains("微信分享 无弹幕 1.5倍"))
         XCTAssertNotEqual(changed.wechatShareOptions.outputURL(for: input), output)
         let invalid = WechatShareOptions(speed: .infinity, videoKbps: -1, maxDimension: 99999)
         XCTAssertEqual(invalid.speed, 1.5)
@@ -89,15 +89,23 @@ final class WechatShareTests: XCTestCase {
         let input = dir.appendingPathComponent("portrait.mp4")
         try await ffmpeg.run(["-f", "lavfi", "-i", "testsrc2=s=360x640:r=24:d=3",
                               "-c:v", "libx264", "-preset", "ultrafast", input.path])
-        let client = BiliClient(store: CookieStore(fileURL: dir.appendingPathComponent("unused-cookies.json")))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CachedStreamStub.self]
+        let client = BiliClient(store: CookieStore(fileURL: dir.appendingPathComponent("unused-cookies.json")), configuration: configuration)
         defer { client.session.invalidateAndCancel() }
+        client.setCookies(["buvid3": "test-only-placeholder"])
         var settings = AppSettings()
         settings.downloadDir = dir.path
-        settings.danmakuMode = .none
+        settings.danmakuMode = .burn
         settings.wechatShareEnabled = true
         settings.autoRetry = 0
         let pipeline = DownloadPipeline(client: client, settings: settings, ffmpeg: ffmpeg)
         let entry = VideoEntry(aid: 1, bvid: "", cid: 1, title: "portrait")
+        let cache = settings.workLayout.cacheDirectory(for: entry).appendingPathComponent("wechat-960", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let raw = cache.appendingPathComponent("merged.mp4")
+        try FileManager.default.moveItem(at: input, to: raw)
+        try CachedStreamStub.stream.cacheIdentity.write(to: cache.appendingPathComponent("source.key"), atomically: true, encoding: .utf8)
         let first = try await pipeline.run(entry) { _ in }
         XCTAssertFalse(first.skipped)
         XCTAssertNotEqual(first.file, input)
@@ -110,10 +118,12 @@ final class WechatShareTests: XCTestCase {
         let second = try await pipeline.run(entry) { _ in }
         XCTAssertTrue(second.skipped)
         XCTAssertEqual(first.file, second.file)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: raw.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: input.path))
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.hasPrefix(".wechat-") })
     }
 
-    func testSidecarIsBurnedBeforeSpeedChange() async throws {
+    func testShareIgnoresSidecarAndBurnSetting() async throws {
         guard let ffmpeg = FFmpeg.locate() else { throw XCTSkip("需要 ffmpeg/libass") }
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -125,17 +135,38 @@ final class WechatShareTests: XCTestCase {
         style.fixedDuration = 1.5
         let comment = DanmakuComment(id: 1, time: 3, mode: 5, fontSize: 25, color: 0xFFFFFF,
                                      midHash: "", content: "SHARE", ctime: 0, weight: 0, pool: 0)
-        let ass = dir.appendingPathComponent("black.ass")
+        let entry = VideoEntry(aid: 1, bvid: "", cid: 1, title: "black")
+        var settings = AppSettings()
+        settings.downloadDir = dir.path
+        settings.danmakuMode = .burn
+        settings.wechatShareEnabled = true
+        settings.autoRetry = 0
+        let cache = settings.workLayout.cacheDirectory(for: entry)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let ass = cache.appendingPathComponent("danmaku.ass")
         try DanmakuASS.make([comment], width: 640, height: 360, style: style).text.write(to: ass, atomically: true, encoding: .utf8)
-        let output = WechatShareOptions().outputURL(for: input)
-        try await ffmpeg.exportWechatShare(input: input, output: output, options: WechatShareOptions(), ass: ass, sourceDuration: 6)
-        // 原片第 3~4.5 秒的弹幕应出现在分享版第 2~3 秒。
+        let sourceCache = cache.appendingPathComponent("wechat-960", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceCache, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: input, to: sourceCache.appendingPathComponent("merged.mp4"))
+        try CachedStreamStub.stream.cacheIdentity.write(to: sourceCache.appendingPathComponent("source.key"), atomically: true, encoding: .utf8)
+        // 即使同名普通成片已被修改，分享仍须只读取独立缓存的无弹幕原片。
+        try Data("existing-normal-output-placeholder".utf8).write(to: input)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CachedStreamStub.self]
+        let client = BiliClient(store: CookieStore(fileURL: dir.appendingPathComponent("unused-cookies.json")), configuration: configuration)
+        defer { client.session.invalidateAndCancel() }
+        client.setCookies(["buvid3": "test-only-placeholder"])
+        let result = try await DownloadPipeline(client: client, settings: settings, ffmpeg: ffmpeg).run(entry) { _ in }
+        let output = result.file
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ass.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("black.ass").path))
+        // 任意时间均不能出现字幕，分享模式也不能复用普通成片。
         func brightPixels(at time: String) throws -> Int {
             let data = try capture(ffmpeg.path, ["-v", "error", "-ss", time, "-i", output.path, "-frames:v", "1", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"])
             return data.filter { $0 > 100 }.count
         }
         XCTAssertEqual(try brightPixels(at: "1"), 0)
-        XCTAssertGreaterThan(try brightPixels(at: "2.5"), 50)
+        XCTAssertEqual(try brightPixels(at: "2.5"), 0)
         XCTAssertEqual(try brightPixels(at: "3.5"), 0)
     }
 
@@ -161,6 +192,7 @@ final class WechatShareTests: XCTestCase {
         } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(try Data(contentsOf: input), original)
         XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["original.mp4"])
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["original.mp4", "00_cache"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("00_cache").path), [])
     }
 }

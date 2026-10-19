@@ -8,7 +8,7 @@ let usage = """
 支持：视频 / 多P / 合集 / 系列 / 收藏夹 / 番剧 / UP 主空间 / b23 短链
 
 选项：
-  -o, --output <目录>      保存位置（默认沿用 App 设置，初始为 ~/Downloads/Bilibili）
+  -o, --output <目录>      工作目录（默认沿用 App 设置，初始为 ~/download/bilibili-downloader）
   -q, --quality <qn>       清晰度：120=4K 116=1080P60 112=1080P+ 80=1080P(默认) 64=720P 32=480P
   -c, --codec <avc|hevc|av1>   视频编码偏好（默认 avc）
   -d, --danmaku <none|ass|burn>  弹幕：不下载 / ASS 字幕 / 烧录进视频（默认 burn）
@@ -18,9 +18,9 @@ let usage = """
       --hardware-kbps <n>  硬件码率，单位 kbps（默认3000；0=自动）
       --renderer <libass|metal>  弹幕绘制方式（默认 metal）
       --segments <n>       烧录时并行渲染段数（默认 0 = 自动）
-      --keep-original      烧录后保留无弹幕原版
-      --xml                同时保存 XML 弹幕
-      --wechat             额外生成微信分享版（默认 1.5 倍速，保留正常版本）
+      --keep-original      兼容旧参数；原片现始终保留在 00_cache
+      --xml                在 00_cache 中同时保存 XML 弹幕
+      --wechat             下载最接近目标尺寸的源，生成无弹幕分享版（默认 1.5 倍速）
       --no-wechat          本次不生成微信分享版
       --wechat-speed <n>   分享倍速，1~2（默认 1.5）
       --wechat-kbps <n>    分享视频码率，400~2000（默认 1000）
@@ -96,6 +96,8 @@ while !args.isEmpty {
 }
 
 guard let target else { print(usage); exit(1) }
+try settings.workLayout.prepare()
+Log.configure(workDirectory: settings.workLayout.root)
 let client = BiliClient()
 
 func printProgress(_ line: String) {

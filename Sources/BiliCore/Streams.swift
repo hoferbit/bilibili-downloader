@@ -66,14 +66,18 @@ private func orderedURLs(_ json: JSON) -> [String] {
 }
 
 public extension BiliClient {
-    func streams(for e: VideoEntry, quality: Int, codec: VideoCodec, prefer60: Bool, tag: String? = nil) async throws -> StreamInfo {
+    func streams(for e: VideoEntry, quality: Int, codec: VideoCodec, prefer60: Bool,
+                 targetMaxDimension: Int? = nil, tag: String? = nil) async throws -> StreamInfo {
+        let requestedQN = targetMaxDimension.map { edge in
+            [(16, 640), (32, 854), (64, 1280), (80, 1920)].min { abs($0.1 - edge) < abs($1.1 - edge) }!.0
+        } ?? 127
         let data: JSON
         if let ep = e.epid {
             data = try await getJSON("https://api.bilibili.com/pgc/player/web/playurl",
-                                     ["ep_id": String(ep), "cid": String(e.cid), "qn": "127",
+                                     ["ep_id": String(ep), "cid": String(e.cid), "qn": String(requestedQN),
                                       "fnval": "4048", "fnver": "0", "fourk": "1"])["result"]
         } else {
-            var p = ["cid": String(e.cid), "qn": "127", "fnval": "4048", "fnver": "0", "fourk": "1",
+            var p = ["cid": String(e.cid), "qn": String(requestedQN), "fnval": "4048", "fnver": "0", "fourk": "1",
                      "web_location": "1315873"]
             if e.bvid.isEmpty { p["avid"] = String(e.aid) } else { p["bvid"] = e.bvid }
             data = try await getJSON("https://api.bilibili.com/x/player/wbi/playurl", p, wbi: true)["data"]
@@ -98,7 +102,10 @@ public extension BiliClient {
 
         // 选清晰度：不超过设定值的最高档；有 60 帧同分辨率版本时优先（1080P60 需要大会员）
         var target: Int
-        if prefer60 && quality == 80 && ids.contains(116) {
+        if let edge = targetMaxDimension, let nearest = nearestShareQuality(videos, maxDimension: edge) {
+            target = nearest
+            Log.info("微信分享目标最长边 \(edge)px，选择最接近的可用源：\(Quality.name(target))", tag: tag)
+        } else if prefer60 && quality == 80 && ids.contains(116) {
             target = 116
         } else if prefer60 && quality == 64 && ids.contains(74) {
             target = 74
@@ -154,6 +161,21 @@ public extension BiliClient {
                           videoBandwidth: picked["bandwidth"].int ?? 0, durationMs: durationMs,
                           available: available.isEmpty ? ids.sorted(by: >) : available)
     }
+}
+
+func nearestShareQuality(_ videos: [JSON], maxDimension: Int) -> Int? {
+    videos.filter {
+        guard let qn = $0["id"].int else { return false }
+        return !Quality.special.contains(qn) && !streamIsEncrypted($0)
+            && max($0["width"].int ?? 0, $0["height"].int ?? 0) > 0
+    }.min { a, b in
+        let edgeA = max(a["width"].int ?? 0, a["height"].int ?? 0)
+        let edgeB = max(b["width"].int ?? 0, b["height"].int ?? 0)
+        let distanceA = abs(edgeA - maxDimension), distanceB = abs(edgeB - maxDimension)
+        if distanceA != distanceB { return distanceA < distanceB }
+        // 同尺寸优先普通低码率档，不为分享下载 60fps/高码率原片。
+        return (a["id"].int ?? 0) < (b["id"].int ?? 0)
+    }?["id"].int
 }
 
 /// 不把试看或加密流误当成完整下载结果。

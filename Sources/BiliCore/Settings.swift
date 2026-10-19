@@ -13,8 +13,8 @@ public enum DanmakuMode: String, Codable, CaseIterable, Sendable, Identifiable {
 }
 
 public struct AppSettings: Codable, Sendable, Equatable {
-    public var downloadDir: String = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Bilibili").path
+    public var downloadDir: String = WorkLayout.defaultDirectory.path
+    public var workLayout: WorkLayout { WorkLayout(directory: downloadDir) }
     public var quality = 80
     public var codec = VideoCodec.avc
     /// 有 1080P60（大会员）时优先下载
@@ -33,7 +33,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var burnQuality = BurnQuality.size
     /// 烧录时并行渲染的段数，0 = 自动（libass 单线程，弹幕密集时并行能快 2~3 倍）
     public var burnSegments = 0
-    /// 烧录后额外保留无弹幕原版 + ASS
+    /// 兼容旧配置；原片和 ASS 现在始终保留在 00_cache。
     public var keepOriginal = false
     public var saveXML = false
     public var wechatShareEnabled = false
@@ -58,6 +58,9 @@ public struct AppSettings: Codable, Sendable, Equatable {
             if let v = try? c.decode(T.self, forKey: key) { target = v }
         }
         load(.downloadDir, &downloadDir)
+        let oldDefault = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Bilibili", isDirectory: true).standardizedFileURL
+        if WorkLayout(directory: downloadDir).root == oldDefault { downloadDir = WorkLayout.defaultDirectory.path }
         load(.quality, &quality)
         load(.codec, &codec)
         load(.prefer60, &prefer60)

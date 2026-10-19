@@ -10,13 +10,15 @@ struct SettingsView: View {
         TabView {
             Form {
                 Section("保存") {
-                    LabeledContent("下载位置") {
+                    LabeledContent("工作目录") {
                         HStack {
                             Text(model.settings.downloadDir).lineLimit(1).truncationMode(.head)
                                 .foregroundStyle(.secondary)
                             Button("选择…") { chooseFolder() }
                         }
                     }
+                    Text("原片和弹幕保留在 00_cache；日志放在 01_log；成片直接放在工作目录。")
+                        .font(.caption).foregroundStyle(.secondary)
                     LabeledContent("队列模式", value: "下载 1 个＋合成 1 个")
                     Text("合成当前视频时下载下一个；下一个下载完成后等待合成，避免同时渲染多个视频。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -79,13 +81,14 @@ struct SettingsView: View {
                             ForEach(1 ... 8, id: \.self) { n in Text(n == 1 ? "不分段" : "\(n) 段").tag(n) }
                         }
                         .help("弹幕渲染（libass）是单线程的，长视频切成几段同时渲染再无损拼接，弹幕密集时能快 2~3 倍")
-                        Toggle("同时保留无弹幕原版和 ASS 字幕", isOn: $model.settings.keepOriginal)
+                        Text("无弹幕原片和 ASS 字幕保留在 00_cache。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Toggle("同时保存 XML 弹幕文件", isOn: $model.settings.saveXML)
+                    Toggle("在 00_cache 中同时保存 XML 弹幕文件", isOn: $model.settings.saveXML)
                 } header: {
                     Text("弹幕")
                 } footer: {
-                    Text("烧录：把弹幕直接画进画面，任何播放器都能看到；开启 60fps 后弹幕滚动更顺滑，但需要重新编码，耗时较长。\nASS 字幕：不重新编码，用 IINA / VLC / mpv 播放时自动加载同名字幕。")
+                    Text("烧录：把弹幕直接画进画面，任何播放器都能看到；开启 60fps 后弹幕滚动更顺滑，但需要重新编码，耗时较长。\nASS 字幕：不重新编码，字幕保存在 00_cache 中，可在播放器中手动加载。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("弹幕样式") {
@@ -136,7 +139,7 @@ struct SettingsView: View {
                 } header: {
                     Text("微信分享")
                 } footer: {
-                    Text("额外生成分享版 MP4，保留正常版本。默认 1.5 倍速、最长边 960px、30fps；音调保持不变，弹幕同步加速。\n默认原片每分钟约生成 5.3MB。这是本程序的压缩预设，微信仍可能二次压缩。")
+                    Text("直接下载最接近目标尺寸的可用源视频，不获取、不烧录弹幕，也不先生成普通成片。原片保留在 00_cache。\n默认 1.5 倍速、最长边 960px、30fps，音调保持不变；原片每分钟约生成 5.3MB。微信仍可能二次压缩。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

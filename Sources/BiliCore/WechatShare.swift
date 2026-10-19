@@ -20,7 +20,7 @@ public struct WechatShareOptions: Sendable, Equatable {
     }
 
     public func outputURL(for input: URL) -> URL {
-        let suffix = " (微信分享 \(speedLabel)倍 \(maxDimension)px \(videoKbps)k)"
+        let suffix = " (微信分享 无弹幕 \(speedLabel)倍 \(maxDimension)px \(videoKbps)k)"
         var base = sanitizeFileName(input.deletingPathExtension().lastPathComponent)
         while base.utf8.count + suffix.utf8.count > 200 { base.removeLast() }
         return input.deletingLastPathComponent()
@@ -35,22 +35,18 @@ public struct WechatShareOptions: Sendable, Equatable {
 }
 
 public extension FFmpeg {
-    /// 两遍编码使体积接近目标码率；先绘制字幕，再同步加速画面与声音。
+    /// 两遍编码使体积接近目标码率，同步加速画面与声音，不读取或绘制弹幕。
     func exportWechatShare(input: URL, output: URL, options: WechatShareOptions,
-                           ass: URL? = nil, sourceDuration: Double? = nil, tag: String? = nil,
+                           sourceDuration: Double? = nil, cacheDirectory: URL? = nil, tag: String? = nil,
                            progress: @escaping @Sendable (FFProgress) -> Void = { _ in }) async throws {
         try Task.checkCancellation()
         let fm = FileManager.default
-        let work = output.deletingLastPathComponent().appendingPathComponent(".wechat-\(UUID().uuidString)", isDirectory: true)
+        let cache = cacheDirectory ?? output.deletingLastPathComponent().appendingPathComponent("00_cache", isDirectory: true)
+        let work = cache.appendingPathComponent(".wechat-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
-        var filter = options.videoFilter
-        if let ass {
-            try fm.copyItem(at: ass, to: work.appendingPathComponent("danmaku.ass"))
-            filter = "ass=danmaku.ass," + filter
-        }
         let duration = sourceDuration.map { $0 / options.speed }
-        let common = ["-i", input.path, "-map", "0:v:0", "-vf", filter,
+        let common = ["-i", input.path, "-map", "0:v:0", "-vf", options.videoFilter,
                       "-c:v", "libx264", "-preset", "medium", "-b:v", "\(options.videoKbps)k",
                       "-maxrate", "\(options.videoKbps * 2)k", "-bufsize", "\(options.videoKbps * 4)k",
                       "-pix_fmt", "yuv420p", "-passlogfile", work.appendingPathComponent("pass").path]

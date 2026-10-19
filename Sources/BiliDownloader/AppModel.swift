@@ -45,7 +45,18 @@ final class Selection: Identifiable {
 @MainActor @Observable
 final class AppModel {
     let client = BiliClient()
-    var settings: AppSettings { didSet { if settings != oldValue { settings.save(); pump() } } }
+    var settings: AppSettings {
+        didSet {
+            if settings != oldValue {
+                if settings.downloadDir != oldValue.downloadDir {
+                    try? settings.workLayout.prepare()
+                    Log.configure(workDirectory: settings.workLayout.root)
+                }
+                settings.save()
+                pump()
+            }
+        }
+    }
     var account: Account?
     var avatar: NSImage?
     var urlText = ""
@@ -58,6 +69,8 @@ final class AppModel {
 
     init() {
         settings = AppSettings.load()
+        try? settings.workLayout.prepare()
+        Log.configure(workDirectory: settings.workLayout.root)
         ffmpeg = FFmpeg.locate(custom: settings.ffmpegPath)
         let (ff, s) = (ffmpeg, settings)
         Task.detached { Log.environment(ffmpeg: ff, settings: s, app: "B站下载器") }

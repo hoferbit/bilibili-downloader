@@ -136,25 +136,16 @@ public struct DownloadPipeline: Sendable {
             rawUpdate(u)
         }
         let fm = FileManager.default
-        var dir = URL(fileURLWithPath: (settings.downloadDir as NSString).expandingTildeInPath, isDirectory: true)
-        if let folder = e.folder { dir.appendPathComponent(sanitizeFileName(folder), isDirectory: true) }
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = sanitizeFileName(e.fileName)
+        let layout = settings.workLayout
+        try layout.prepare()
+        let dir = layout.root
+        let name = layout.outputName(for: e)
         let final = dir.appendingPathComponent(name + ".mp4")
-        let tmp = dir.appendingPathComponent(".bilidl-tmp", isDirectory: true)
-            .appendingPathComponent(sanitizeFileName(e.id.replacingOccurrences(of: "#", with: "_")), isDirectory: true)
+        let tmp = layout.cacheDirectory(for: e)
+        if settings.wechatShareEnabled {
+            return try await runWechatShare(e, layout: layout, final: final, tag: tag, timer: timer, lease: lease, update: update)
+        }
         if fm.fileExists(atPath: final.path) {
-            if settings.wechatShareEnabled {
-                let share = settings.wechatShareOptions.outputURL(for: final)
-                if fm.fileExists(atPath: share.path) {
-                    return JobResult(file: share, skipped: true, note: "微信分享文件已存在，跳过")
-                }
-                try await lease.compose()
-                let duration = await ffmpeg.probeDuration(final)
-                let result = try await makeWechatShare(final, duration: duration, tag: tag, update: update)
-                try? fm.removeItem(at: tmp)
-                return result
-            }
             return JobResult(file: final, skipped: true, note: "文件已存在，跳过")
         }
 
@@ -220,7 +211,7 @@ public struct DownloadPipeline: Sendable {
             } else {
                 let comments = try await client.danmaku(cid: e.cid, aid: e.aid, duration: Double(s.durationMs) / 1000, tag: tag)
                 if settings.saveXML {
-                    try DanmakuXML.make(comments, cid: e.cid).write(to: dir.appendingPathComponent(name + ".xml"),
+                    try DanmakuXML.make(comments, cid: e.cid).write(to: tmp.appendingPathComponent("danmaku.xml"),
                                                                       atomically: true, encoding: .utf8)
                 }
                 let assWatch = Stopwatch()
@@ -233,9 +224,6 @@ public struct DownloadPipeline: Sendable {
             do {
 
                 if settings.danmakuMode == .assFile || ass.count == 0 {
-                    if ass.count > 0 {
-                        try ass.text.write(to: dir.appendingPathComponent(name + ".ass"), atomically: true, encoding: .utf8)
-                    }
                     notes.append(ass.count == 0 ? "无弹幕" : "弹幕 \(ass.count) 条")
                 } else {
                     timer.begin("渲染")
@@ -261,12 +249,6 @@ public struct DownloadPipeline: Sendable {
                         detail += " · \(shown) 条 · \(fpsLabel) · \(encoder)"
                         update(JobUpdate(stage: .rendering, progress: p.fraction, detail: detail, quality: quality))
                     }
-                    if settings.keepOriginal {
-                        let raw = dir.appendingPathComponent(name + " (无弹幕).mp4")
-                        try? fm.removeItem(at: raw)
-                        try fm.moveItem(at: merged, to: raw)
-                        try ass.text.write(to: dir.appendingPathComponent(name + " (无弹幕).ass"), atomically: true, encoding: .utf8)
-                    }
                     outputFile = burned
                     outQuality = quality.replacingOccurrences(of: "\(Int(s.fps.rounded()))fps", with: fpsLabel)
                     notes.append("已烧录弹幕 \(shown) 条，渲染用时 \(watch.text)")
@@ -275,36 +257,57 @@ public struct DownloadPipeline: Sendable {
         }
 
         timer.begin("收尾")
-        try fm.moveItem(at: outputFile, to: final)
-        // 正常文件先落盘，分享压缩失败或取消后可直接从该文件重试，无需重新下载。
-        var shareResult: JobResult?
-        if settings.wechatShareEnabled {
-            timer.begin("微信分享")
-            shareResult = try await makeWechatShare(final, duration: Double(s.durationMs) / 1000, tag: tag, update: update)
+        if outputFile == merged {
+            try fm.copyItem(at: outputFile, to: final)
+        } else {
+            try fm.moveItem(at: outputFile, to: final)
         }
-        try? fm.removeItem(at: tmp)
-        // 临时目录空了就删掉
-        let tmpRoot = tmp.deletingLastPathComponent()
-        if (try? fm.contentsOfDirectory(atPath: tmpRoot.path))?.isEmpty == true { try? fm.removeItem(at: tmpRoot) }
-
-        if let shareResult { notes.append(shareResult.note) }
-        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: shareResult == nil ? outQuality : "微信分享 · \(settings.wechatShareOptions.speedLabel)倍"))
-        return JobResult(file: shareResult?.file ?? final, skipped: false, note: notes.joined(separator: "，"))
+        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: outQuality))
+        return JobResult(file: final, skipped: false, note: notes.joined(separator: "，"))
     }
 
-    private func makeWechatShare(_ input: URL, duration: Double?, tag: String,
-                                 update: @escaping @Sendable (JobUpdate) -> Void) async throws -> JobResult {
+    private func runWechatShare(_ entry: VideoEntry, layout: WorkLayout, final: URL, tag: String,
+                                timer: StageTimer, lease: PipelineLease,
+                                update: @escaping @Sendable (JobUpdate) -> Void) async throws -> JobResult {
+        let fm = FileManager.default
         let options = settings.wechatShareOptions
-        let output = options.outputURL(for: input)
-        let sidecar = input.deletingPathExtension().appendingPathExtension("ass")
-        let ass = settings.danmakuMode == .assFile && FileManager.default.fileExists(atPath: sidecar.path) ? sidecar : nil
+        let output = options.outputURL(for: final)
+        if fm.fileExists(atPath: output.path) {
+            return JobResult(file: output, skipped: true, note: "微信分享文件已存在，跳过")
+        }
+        timer.begin("解析")
+        update(JobUpdate(stage: .resolving, progress: nil, detail: "微信分享：选择最接近 \(options.maxDimension)px 的源视频…"))
+        let stream = try await client.streams(for: entry, quality: 32, codec: .avc, prefer60: false,
+                                               targetMaxDimension: options.maxDimension, tag: tag)
+        // 分享原片与普通下载独立缓存，避免复用已经烧录弹幕的成片。
+        let cache = layout.cacheDirectory(for: entry).appendingPathComponent("wechat-\(options.maxDimension)", isDirectory: true)
+        let key = cache.appendingPathComponent("source.key")
+        if fm.fileExists(atPath: cache.path), (try? String(contentsOf: key, encoding: .utf8)) != stream.cacheIdentity {
+            try fm.removeItem(at: cache)
+        }
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        try stream.cacheIdentity.write(to: key, atomically: true, encoding: .utf8)
+        let original = cache.appendingPathComponent("merged.mp4")
+        if fm.fileExists(atPath: original.path), await ffmpeg.probeSize(original) != nil {
+            try await lease.compose()
+        } else {
+            timer.begin("下载")
+            try await download(stream, into: cache, merged: original, quality: stream.summary,
+                               tag: tag, timer: timer, lease: lease, update: update)
+        }
+        if stream.needsDecodeValidation {
+            try await ffmpeg.run(["-xerror", "-i", original.path, "-map", "0:v:0", "-frames:v", "1", "-an", "-f", "null", "-"], tag: tag)
+        }
+        timer.begin("微信分享")
+        let duration = await ffmpeg.probeDuration(original)
         update(JobUpdate(stage: .rendering, progress: 0, detail: "微信分享：\(options.speedLabel)倍，压缩中…"))
-        try await ffmpeg.exportWechatShare(input: input, output: output, options: options, ass: ass,
-                                          sourceDuration: duration, tag: tag) { p in
+        try await ffmpeg.exportWechatShare(input: original, output: output, options: options,
+                                          sourceDuration: duration, cacheDirectory: cache, tag: tag) { p in
             update(JobUpdate(stage: .rendering, progress: duration == nil ? nil : p.fraction,
                              detail: "微信分享：\(options.speedLabel)倍 · \(Int(p.fraction * 100))%"))
         }
-        return JobResult(file: output, skipped: false, note: "已生成微信分享版（\(options.speedLabel)倍），保留正常版本")
+        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: "微信分享 · 无弹幕 · \(options.speedLabel)倍"))
+        return JobResult(file: output, skipped: false, note: "微信分享（无弹幕，\(options.speedLabel)倍），原片保留在 00_cache")
     }
 
     private func download(_ s: StreamInfo, into tmp: URL, merged: URL, quality: String, tag: String,
