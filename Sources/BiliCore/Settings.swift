@@ -37,13 +37,6 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var keepOriginal = false
     public var saveXML = false
     public var wechatShareEnabled = false
-    public var wechatShareSpeed = 1.5
-    public var wechatShareVideoKbps = 1000
-    public var wechatShareMaxDimension = 960
-    public var wechatShareOptions: WechatShareOptions {
-        WechatShareOptions(speed: wechatShareSpeed, videoKbps: wechatShareVideoKbps,
-                           maxDimension: wechatShareMaxDimension)
-    }
     public var danmakuStyle = DanmakuStyle()
     public var danmakuStyleVersion = 4
     public var ffmpegPath = ""
@@ -60,7 +53,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         load(.downloadDir, &downloadDir)
         let oldDefault = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bilibili", isDirectory: true).standardizedFileURL
-        if WorkLayout(directory: downloadDir).root == oldDefault { downloadDir = WorkLayout.defaultDirectory.path }
+        if WorkLayout(directory: downloadDir).root == oldDefault
+            || WorkLayout(directory: downloadDir).root == FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("download/bilibili-downloader", isDirectory: true) { downloadDir = WorkLayout.defaultDirectory.path }
         load(.quality, &quality)
         load(.codec, &codec)
         load(.prefer60, &prefer60)
@@ -76,9 +70,6 @@ public struct AppSettings: Codable, Sendable, Equatable {
         load(.keepOriginal, &keepOriginal)
         load(.saveXML, &saveXML)
         load(.wechatShareEnabled, &wechatShareEnabled)
-        load(.wechatShareSpeed, &wechatShareSpeed)
-        load(.wechatShareVideoKbps, &wechatShareVideoKbps)
-        load(.wechatShareMaxDimension, &wechatShareMaxDimension)
         load(.danmakuStyle, &danmakuStyle)
         // 迁移旧版配置到用户指定的截图预设；之后保留用户的自定义值。
         let styleVersion = (try? c.decode(Int.self, forKey: .danmakuStyleVersion)) ?? 0

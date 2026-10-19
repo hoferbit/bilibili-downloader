@@ -3,8 +3,8 @@ import XCTest
 
 final class CachedStreamStub: URLProtocol {
     static var stream: StreamInfo {
-        StreamInfo(videoURLs: ["https://example.invalid/video.m4s"], audioURLs: nil, qn: 80, codec: .avc,
-                   width: 320, height: 180, fps: 30, videoBandwidth: 1000, durationMs: 2000, available: [80])
+        StreamInfo(videoURLs: ["https://example.invalid/video.m4s"], audioURLs: nil, qn: 16, codec: .avc,
+                   width: 640, height: 360, fps: 25, videoBandwidth: 1000, durationMs: 2000, available: [16])
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -14,10 +14,30 @@ final class CachedStreamStub: URLProtocol {
             payload = ["code": 0, "data": ["wbi_img": ["img_url": "https://example.invalid/" + String(repeating: "a", count: 32) + ".png",
                                                        "sub_url": "https://example.invalid/" + String(repeating: "b", count: 32) + ".png"]]]
         } else if request.url?.path == "/x/player/wbi/playurl" {
-            payload = ["code": 0, "data": ["timelength": 2000, "accept_quality": [80], "dash": ["video": [
-                ["id": 80, "codecid": 7, "base_url": "https://example.invalid/video.m4s", "width": 320,
-                 "height": 180, "frame_rate": "30", "bandwidth": 1000]
-            ]]]]
+            let params = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let share = params.contains { $0.name == "qn" && $0.value == "16" }
+                && !params.contains { $0.name == "avid" && $0.value == "999" }
+            let qn = share ? 16 : 80
+            let lowestCodec = params.contains { $0.name == "avid" && $0.value == "2" }
+            var video: [[String: Any]] = [["id": qn, "codecid": 7, "base_url": "https://example.invalid/video.m4s",
+                                           "width": share ? 640 : 320, "height": share ? 360 : 180,
+                                           "frame_rate": share ? "25" : "30", "bandwidth": 1000]]
+            var audio: [[String: Any]] = []
+            if share {
+                video += [
+                    ["id": 16, "codecid": 12, "base_url": "https://example.invalid/hevc.m4s", "width": 640, "height": 360, "bandwidth": lowestCodec ? 500 : 1500],
+                    ["id": 16, "codecid": 13, "base_url": "https://example.invalid/unknown.m4s", "width": 640, "height": 360, "bandwidth": 0],
+                    ["id": 32, "codecid": 7, "base_url": "https://example.invalid/480p.m4s", "width": 854, "height": 480, "bandwidth": 300],
+                    ["id": 16, "codecid": 7, "base_url": "https://example.invalid/encrypted.m4s", "width": 640, "height": 360, "bandwidth": 1, "drm_tech_type": 1]
+                ]
+                if lowestCodec {
+                    audio = [["id": 1, "base_url": "https://example.invalid/high.m4s", "bandwidth": 128000],
+                             ["id": 2, "base_url": "https://example.invalid/low.m4s", "bandwidth": 64000],
+                             ["id": 3, "base_url": "https://example.invalid/unknown-audio.m4s", "bandwidth": 0]]
+                }
+            }
+            payload = ["code": 0, "data": ["timelength": 2000, "accept_quality": [qn], "dash": ["video": video, "audio": audio]]]
+
         } else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
@@ -32,7 +52,7 @@ final class CachedStreamStub: URLProtocol {
 
 final class WorkLayoutTests: XCTestCase {
     func testDefaultMigrationAndExplicitWorkDirectory() throws {
-        XCTAssertEqual(AppSettings().workLayout.root, FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("download/bilibili-downloader", isDirectory: true))
+        XCTAssertEqual(AppSettings().workLayout.root, FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/bilibili-downloader", isDirectory: true))
         let old = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appendingPathComponent("Bilibili").path
         let migrated = try JSONDecoder().decode(AppSettings.self, from: JSONSerialization.data(withJSONObject: ["downloadDir": old]))
         XCTAssertEqual(migrated.workLayout.root, WorkLayout.defaultDirectory)
@@ -41,7 +61,9 @@ final class WorkLayoutTests: XCTestCase {
         let entry = VideoEntry(aid: 1, bvid: "", cid: 2, title: "P01", folder: "series")
         let layout = WorkLayout(directory: "/tmp/custom-work")
         XCTAssertEqual(layout.cacheDirectory(for: entry).deletingLastPathComponent(), layout.cache)
-        XCTAssertEqual(layout.outputName(for: entry), "series - P01")
+        XCTAssertEqual(layout.outputName(for: entry), "P01")
+        let folder = layout.cacheDirectory(for: entry).lastPathComponent
+        XCTAssertNotNil(folder.range(of: #"^\d{8} P01$"#, options: .regularExpression))
     }
 
     func testOriginalSurvivesAndCollectionOutputIsFlat() async throws {
@@ -55,7 +77,7 @@ final class WorkLayoutTests: XCTestCase {
         let layout = settings.workLayout
         try layout.prepare()
         let entry = VideoEntry(aid: 1, bvid: "", cid: 2, title: "P01", folder: "series")
-        let cache = layout.cacheDirectory(for: entry)
+        let cache = layout.cacheDirectory(for: entry).appendingPathComponent("normal", isDirectory: true)
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         let original = cache.appendingPathComponent("merged.mp4")
         try await ffmpeg.run(["-f", "lavfi", "-i", "color=black:s=320x180:r=30:d=2", "-c:v", "libx264", original.path])
@@ -68,7 +90,7 @@ final class WorkLayoutTests: XCTestCase {
         defer { client.session.invalidateAndCancel() }
         client.setCookies(["buvid3": "test-only-placeholder"])
         let result = try await DownloadPipeline(client: client, settings: settings, ffmpeg: ffmpeg).run(entry) { _ in }
-        XCTAssertEqual(result.file, root.appendingPathComponent("series - P01.mp4"))
+        XCTAssertEqual(result.file, root.appendingPathComponent("P01.mp4"))
         XCTAssertEqual(try Data(contentsOf: result.file), try Data(contentsOf: original))
         XCTAssertTrue(FileManager.default.fileExists(atPath: layout.logs.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("series").path))

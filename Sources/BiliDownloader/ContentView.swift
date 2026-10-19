@@ -102,9 +102,9 @@ struct InputBar: View {
             HStack(spacing: 8) {
                 Toggle("微信分享模式", isOn: $model.settings.wechatShareEnabled)
                     .toggleStyle(.checkbox)
-                    .help("下载最接近目标尺寸的源视频，不获取或烧录弹幕；速度和体积可在设置里调整")
+                    .help("直接下载最低分辨率原片，只合并音视频，不做加工")
                 if model.settings.wechatShareEnabled {
-                    Text("无弹幕 · \(model.settings.wechatShareOptions.speedLabel)倍 · \(model.settings.wechatShareOptions.maxDimension)px · \(model.settings.wechatShareOptions.videoKbps)kbps")
+                    Text("最低分辨率原片 · 不加工")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -125,12 +125,12 @@ struct Notices: View {
                     Button("重新检测") { model.refreshFFmpeg() }
                 }
             }
-            if model.account == nil && model.settings.quality > 32 {
+            if !model.settings.wechatShareEnabled && model.account == nil && model.settings.quality > 32 {
                 Banner(icon: "person.crop.circle.badge.exclamationmark", color: .pink,
                        text: "未登录时 B 站最高只给 480P，扫码登录后即可下载 1080P。") {
                     Button("扫码登录") { model.showLogin = true }
                 }
-            } else if let acc = model.account, !acc.isVip && [116, 112, 120, 125, 126, 127].contains(model.settings.quality) {
+            } else if let acc = model.account, !model.settings.wechatShareEnabled && !acc.isVip && [116, 112, 120, 125, 126, 127].contains(model.settings.quality) {
                 Banner(icon: "info.circle", color: .blue,
                        text: "\(Quality.name(model.settings.quality)) 需要大会员，非大会员会自动降到 1080P。") { EmptyView() }
             }

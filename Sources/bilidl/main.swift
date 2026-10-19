@@ -8,7 +8,7 @@ let usage = """
 支持：视频 / 多P / 合集 / 系列 / 收藏夹 / 番剧 / UP 主空间 / b23 短链
 
 选项：
-  -o, --output <目录>      工作目录（默认沿用 App 设置，初始为 ~/download/bilibili-downloader）
+  -o, --output <目录>      工作目录（默认沿用 App 设置，初始为 ~/Downloads/bilibili-downloader）
   -q, --quality <qn>       清晰度：120=4K 116=1080P60 112=1080P+ 80=1080P(默认) 64=720P 32=480P
   -c, --codec <avc|hevc|av1>   视频编码偏好（默认 avc）
   -d, --danmaku <none|ass|burn>  弹幕：不下载 / ASS 字幕 / 烧录进视频（默认 burn）
@@ -20,11 +20,8 @@ let usage = """
       --segments <n>       烧录时并行渲染段数（默认 0 = 自动）
       --keep-original      兼容旧参数；原片现始终保留在 00_cache
       --xml                在 00_cache 中同时保存 XML 弹幕
-      --wechat             下载最接近目标尺寸的源，生成无弹幕分享版（默认 1.5 倍速）
+      --wechat             直接下载最低分辨率原片，仅合并音视频，不做加工
       --no-wechat          本次不生成微信分享版
-      --wechat-speed <n>   分享倍速，1~2（默认 1.5）
-      --wechat-kbps <n>    分享视频码率，400~2000（默认 1000）
-      --wechat-edge <n>    分享最长边，320~1280 像素（默认 960）
       --all                列表全部下载（默认只下载链接指向的那一集/全部分P）
       --list               只列出解析结果，不下载
   -v, --verbose            在终端同时输出详细日志
@@ -76,15 +73,8 @@ while !args.isEmpty {
     case "--xml": settings.saveXML = true
     case "--wechat": settings.wechatShareEnabled = true
     case "--no-wechat": settings.wechatShareEnabled = false
-    case "--wechat-speed":
-        guard let speed = Double(value()), speed.isFinite, (1 ... 2).contains(speed) else { fail("分享倍速须为 1~2") }
-        settings.wechatShareSpeed = speed
-    case "--wechat-kbps":
-        guard let rate = Int(value()), (400 ... 2000).contains(rate) else { fail("分享视频码率须为 400~2000 kbps") }
-        settings.wechatShareVideoKbps = rate
-    case "--wechat-edge":
-        guard let edge = Int(value()), (320 ... 1280).contains(edge) else { fail("分享最长边须为 320~1280 像素") }
-        settings.wechatShareMaxDimension = edge
+    case "--wechat-speed", "--wechat-kbps", "--wechat-edge":
+        fail("微信分享模式现直接下载最低分辨率原片，不再支持调速、码率或尺寸参数")
     case "--all": selectAll = true
     case "--list": listOnly = true
     case "-v", "--verbose":
@@ -154,7 +144,7 @@ if listOnly {
     for e in parsed.entries { print("  \(e.defaultSelected ? "✓" : " ") \(e.fileName)") }
     finish(0)
 }
-if !client.isLoggedIn && settings.quality > 32 {
+if !settings.wechatShareEnabled && !client.isLoggedIn && settings.quality > 32 {
     print("⚠️  未登录，最高只能下载 480P。运行 `bilidl login` 扫码登录后可下载 1080P。")
 }
 

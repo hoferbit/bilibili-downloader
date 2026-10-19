@@ -67,10 +67,8 @@ private func orderedURLs(_ json: JSON) -> [String] {
 
 public extension BiliClient {
     func streams(for e: VideoEntry, quality: Int, codec: VideoCodec, prefer60: Bool,
-                 targetMaxDimension: Int? = nil, tag: String? = nil) async throws -> StreamInfo {
-        let requestedQN = targetMaxDimension.map { edge in
-            [(16, 640), (32, 854), (64, 1280), (80, 1920)].min { abs($0.1 - edge) < abs($1.1 - edge) }!.0
-        } ?? 127
+                 requestedQuality: Int? = nil, preferSmallest: Bool = false, tag: String? = nil) async throws -> StreamInfo {
+        let requestedQN = requestedQuality ?? 127
         let data: JSON
         if let ep = e.epid {
             data = try await getJSON("https://api.bilibili.com/pgc/player/web/playurl",
@@ -102,9 +100,14 @@ public extension BiliClient {
 
         // 选清晰度：不超过设定值的最高档；有 60 帧同分辨率版本时优先（1080P60 需要大会员）
         var target: Int
-        if let edge = targetMaxDimension, let nearest = nearestShareQuality(videos, maxDimension: edge) {
-            target = nearest
-            Log.info("微信分享目标最长边 \(edge)px，选择最接近的可用源：\(Quality.name(target))", tag: tag)
+        if preferSmallest {
+            let normal = videos.filter { !Quality.special.contains($0["id"].int ?? 0) }
+            target = (normal.isEmpty ? videos : normal).min {
+                let a = ($0["width"].int ?? 0) * ($0["height"].int ?? 0)
+                let b = ($1["width"].int ?? 0) * ($1["height"].int ?? 0)
+                if a > 0, b > 0, a != b { return a < b }
+                return ($0["id"].int ?? 0) < ($1["id"].int ?? 0)
+            }?["id"].int ?? ids.min()!
         } else if prefer60 && quality == 80 && ids.contains(116) {
             target = 116
         } else if prefer60 && quality == 64 && ids.contains(74) {
@@ -120,13 +123,19 @@ public extension BiliClient {
         let sameQuality = videos.filter { $0["id"].int == target }
         let order = [codec] + VideoCodec.allCases.filter { $0 != codec }
         var picked = sameQuality[0]
-        for c in order {
-            if let v = sameQuality.first(where: { $0["codecid"].int == c.codecId }) { picked = v; break }
+        if preferSmallest {
+            picked = sameQuality.min { bitrateForSelection($0) < bitrateForSelection($1) }!
+        } else {
+            for c in order {
+                if let v = sameQuality.first(where: { $0["codecid"].int == c.codecId }) { picked = v; break }
+            }
         }
 
         var audioURLs: [String]?
         var audioId = 0
-        let audios = dash["audio"].array.filter { !streamIsEncrypted($0) }.sorted { ($0["bandwidth"].int ?? 0) > ($1["bandwidth"].int ?? 0) }
+        let audios = dash["audio"].array.filter { !streamIsEncrypted($0) }.sorted {
+            preferSmallest ? bitrateForSelection($0) < bitrateForSelection($1) : ($0["bandwidth"].int ?? 0) > ($1["bandwidth"].int ?? 0)
+        }
         if let a = audios.first {
             audioURLs = orderedURLs(a)
             audioId = a["id"].int ?? a["bandwidth"].int ?? 0
@@ -163,19 +172,9 @@ public extension BiliClient {
     }
 }
 
-func nearestShareQuality(_ videos: [JSON], maxDimension: Int) -> Int? {
-    videos.filter {
-        guard let qn = $0["id"].int else { return false }
-        return !Quality.special.contains(qn) && !streamIsEncrypted($0)
-            && max($0["width"].int ?? 0, $0["height"].int ?? 0) > 0
-    }.min { a, b in
-        let edgeA = max(a["width"].int ?? 0, a["height"].int ?? 0)
-        let edgeB = max(b["width"].int ?? 0, b["height"].int ?? 0)
-        let distanceA = abs(edgeA - maxDimension), distanceB = abs(edgeB - maxDimension)
-        if distanceA != distanceB { return distanceA < distanceB }
-        // 同尺寸优先普通低码率档，不为分享下载 60fps/高码率原片。
-        return (a["id"].int ?? 0) < (b["id"].int ?? 0)
-    }?["id"].int
+private func bitrateForSelection(_ stream: JSON) -> Int {
+    let bandwidth = stream["bandwidth"].int ?? 0
+    return bandwidth > 0 ? bandwidth : Int.max
 }
 
 /// 不把试看或加密流误当成完整下载结果。

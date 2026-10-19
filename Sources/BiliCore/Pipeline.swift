@@ -141,7 +141,7 @@ public struct DownloadPipeline: Sendable {
         let dir = layout.root
         let name = layout.outputName(for: e)
         let final = dir.appendingPathComponent(name + ".mp4")
-        let tmp = layout.cacheDirectory(for: e)
+        let tmp = layout.cacheDirectory(for: e).appendingPathComponent("normal", isDirectory: true)
         if settings.wechatShareEnabled {
             return try await runWechatShare(e, layout: layout, final: final, tag: tag, timer: timer, lease: lease, update: update)
         }
@@ -270,44 +270,44 @@ public struct DownloadPipeline: Sendable {
                                 timer: StageTimer, lease: PipelineLease,
                                 update: @escaping @Sendable (JobUpdate) -> Void) async throws -> JobResult {
         let fm = FileManager.default
-        let options = settings.wechatShareOptions
-        let output = options.outputURL(for: final)
-        if fm.fileExists(atPath: output.path) {
-            return JobResult(file: output, skipped: true, note: "微信分享文件已存在，跳过")
-        }
         timer.begin("解析")
-        update(JobUpdate(stage: .resolving, progress: nil, detail: "微信分享：选择最接近 \(options.maxDimension)px 的源视频…"))
-        let stream = try await client.streams(for: entry, quality: 32, codec: .avc, prefer60: false,
-                                               targetMaxDimension: options.maxDimension, tag: tag)
-        // 分享原片与普通下载独立缓存，避免复用已经烧录弹幕的成片。
-        let cache = layout.cacheDirectory(for: entry).appendingPathComponent("wechat-\(options.maxDimension)", isDirectory: true)
-        let key = cache.appendingPathComponent("source.key")
-        if fm.fileExists(atPath: cache.path), (try? String(contentsOf: key, encoding: .utf8)) != stream.cacheIdentity {
-            try fm.removeItem(at: cache)
+        update(JobUpdate(stage: .resolving, progress: nil, detail: "微信分享：获取最低分辨率原片…"))
+        let stream = try await client.streams(for: entry, quality: 16, codec: .avc, prefer60: false,
+                                               requestedQuality: 16, preferSmallest: true, tag: tag)
+        let cache = layout.cacheDirectory(for: entry)
+        let original = cache.appendingPathComponent(layout.outputName(for: entry) + ".mp4")
+        // 与普通下载隔离续传数据，缓存目录本身仍以日期和视频标题命名。
+        let working = cache.appendingPathComponent("source", isDirectory: true)
+        let key = working.appendingPathComponent("source.key")
+        if (fm.fileExists(atPath: working.path) || fm.fileExists(atPath: original.path)),
+           (try? String(contentsOf: key, encoding: .utf8)) != stream.cacheIdentity {
+            if fm.fileExists(atPath: working.path) { try fm.removeItem(at: working) }
+            if fm.fileExists(atPath: original.path) {
+                try fm.moveItem(at: original, to: cache.appendingPathComponent("previous-source-\(UUID().uuidString).mp4"))
+            }
         }
-        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        try fm.createDirectory(at: working, withIntermediateDirectories: true)
         try stream.cacheIdentity.write(to: key, atomically: true, encoding: .utf8)
-        let original = cache.appendingPathComponent("merged.mp4")
-        if fm.fileExists(atPath: original.path), await ffmpeg.probeSize(original) != nil {
+        if fm.fileExists(atPath: original.path) {
             try await lease.compose()
         } else {
             timer.begin("下载")
-            try await download(stream, into: cache, merged: original, quality: stream.summary,
+            try await download(stream, into: working, merged: original, quality: stream.summary,
                                tag: tag, timer: timer, lease: lease, update: update)
         }
-        if stream.needsDecodeValidation {
-            try await ffmpeg.run(["-xerror", "-i", original.path, "-map", "0:v:0", "-frames:v", "1", "-an", "-f", "null", "-"], tag: tag)
+        try Task.checkCancellation()
+        if fm.fileExists(atPath: final.path), fm.contentsEqual(atPath: original.path, andPath: final.path) {
+            return JobResult(file: final, skipped: true, note: "最低分辨率原片已存在，跳过")
         }
-        timer.begin("微信分享")
-        let duration = await ffmpeg.probeDuration(original)
-        update(JobUpdate(stage: .rendering, progress: 0, detail: "微信分享：\(options.speedLabel)倍，压缩中…"))
-        try await ffmpeg.exportWechatShare(input: original, output: output, options: options,
-                                          sourceDuration: duration, cacheDirectory: cache, tag: tag) { p in
-            update(JobUpdate(stage: .rendering, progress: duration == nil ? nil : p.fraction,
-                             detail: "微信分享：\(options.speedLabel)倍 · \(Int(p.fraction * 100))%"))
+        timer.begin("收尾")
+        if fm.fileExists(atPath: final.path) {
+            // 同名旧成片保留在缓存中，避免覆盖丢失；根目录文件按本次要求更新。
+            let previous = cache.appendingPathComponent("previous-\(UUID().uuidString).mp4")
+            try fm.moveItem(at: final, to: previous)
         }
-        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: "微信分享 · 无弹幕 · \(options.speedLabel)倍"))
-        return JobResult(file: output, skipped: false, note: "微信分享（无弹幕，\(options.speedLabel)倍），原片保留在 00_cache")
+        try fm.copyItem(at: original, to: final)
+        update(JobUpdate(stage: .finished, progress: 1, detail: "完成", quality: "微信分享 · \(stream.qualityName) 原片"))
+        return JobResult(file: final, skipped: false, note: "最低分辨率原片（\(stream.qualityName)），仅合并音视频，不做加工")
     }
 
     private func download(_ s: StreamInfo, into tmp: URL, merged: URL, quality: String, tag: String,

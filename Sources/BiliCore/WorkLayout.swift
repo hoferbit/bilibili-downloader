@@ -3,7 +3,7 @@ import Foundation
 public struct WorkLayout: Sendable {
     public static var defaultDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("download/bilibili-downloader", isDirectory: true)
+            .appendingPathComponent("Downloads/bilibili-downloader", isDirectory: true)
     }
 
     public let root: URL
@@ -14,13 +14,15 @@ public struct WorkLayout: Sendable {
         root = URL(fileURLWithPath: (directory as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
     }
 
-    public func cacheDirectory(for entry: VideoEntry) -> URL {
-        cache.appendingPathComponent(sanitizeFileName(entry.id.replacingOccurrences(of: "#", with: "_")), isDirectory: true)
+    public func cacheDirectory(for entry: VideoEntry, date: Date = Date()) -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd"
+        return cache.appendingPathComponent(sanitizeFileName(formatter.string(from: date) + " " + entry.title), isDirectory: true)
     }
 
     public func outputName(for entry: VideoEntry) -> String {
-        // 成片统一放根目录，将合集/多P名称保留在文件名中，避免不同列表的 P01 重名。
-        sanitizeFileName([entry.folder, entry.fileName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " - "))
+        sanitizeFileName(entry.title)
     }
 
     public func prepare() throws {

@@ -122,24 +122,10 @@ struct SettingsView: View {
                 Section {
                     Toggle("微信分享模式", isOn: $model.settings.wechatShareEnabled)
                         .toggleStyle(.checkbox)
-                    if model.settings.wechatShareEnabled {
-                        SliderRow(title: "播放速度", value: $model.settings.wechatShareSpeed, range: 1 ... 2, format: "%.2f 倍", scale: 1)
-                        Picker("最长边", selection: $model.settings.wechatShareMaxDimension) {
-                            Text("640px（更小）").tag(640)
-                            Text("960px（默认）").tag(960)
-                            Text("1280px（更清晰）").tag(1280)
-                        }
-                        Stepper("视频码率 \(model.settings.wechatShareVideoKbps) kbps", value: $model.settings.wechatShareVideoKbps, in: 400 ... 2000, step: 100)
-                        Button("恢复分享默认参数") {
-                            model.settings.wechatShareSpeed = 1.5
-                            model.settings.wechatShareVideoKbps = 1000
-                            model.settings.wechatShareMaxDimension = 960
-                        }
-                    }
                 } header: {
                     Text("微信分享")
                 } footer: {
-                    Text("直接下载最接近目标尺寸的可用源视频，不获取、不烧录弹幕，也不先生成普通成片。原片保留在 00_cache。\n默认 1.5 倍速、最长边 960px、30fps，音调保持不变；原片每分钟约生成 5.3MB。微信仍可能二次压缩。")
+                    Text("直接选择平台提供的最低分辨率原片，同档选择最低码率的视频流和音轨。只合并音视频，不调速、不缩放、不改帧率、不重新编码，也不获取或烧录弹幕。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
