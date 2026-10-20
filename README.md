@@ -25,7 +25,7 @@ brew install ffmpeg
 ./scripts/build-app.sh
 ```
 
-输出 `build/B站下载器.app` 和 `build/bilidl`。可以把 App 拖进「应用程序」文件夹。
+输出 `build/Bilibili下载器.app` 和 `build/bilidl`。把 App 拖进「应用程序」文件夹，之后可以搜索 `Bilibili` 启动。
 
 ## 使用
 

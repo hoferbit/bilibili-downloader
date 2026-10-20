@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="B站下载器"
+APP_NAME="Bilibili下载器"
 APP="build/${APP_NAME}.app"
 BUNDLE_ID="local.bilidownloader"
 VERSION="1.0.0"
